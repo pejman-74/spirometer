@@ -6,13 +6,11 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.*
 import android.content.Context
-import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
-import androidx.annotation.RequiresFeature
+import androidx.annotation.RequiresApi
 import androidx.annotation.RequiresPermission
 import com.ble.exceptions.*
-import com.ble.models.BLEDevice
 import com.ble.utils.PermissionUtils
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.awaitClose
@@ -22,6 +20,7 @@ import kotlin.coroutines.resume
 
 internal const val DEFAULT_TIMEOUT = 10000L
 
+
 class BLE(private var context: Context) {
 
     /* Bluetooth related variables */
@@ -29,18 +28,7 @@ class BLE(private var context: Context) {
     private var adapter: BluetoothAdapter? = null
     private var scanner: BluetoothLeScanner? = null
 
-    /* Scan related variables */
-    private val defaultScanSettings by lazy {
-        val builder = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
-            builder.setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
-                //.setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
-                .setNumOfMatches(ScanSettings.MATCH_NUM_ONE_ADVERTISEMENT)
-
-        builder.build()
-    }
     var isScanRunning = false
         private set
 
@@ -59,7 +47,9 @@ class BLE(private var context: Context) {
         verifyBluetoothHardwareFeature()
         manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         adapter = manager?.adapter
-        scanner = adapter?.bluetoothLeScanner
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            scanner = adapter?.bluetoothLeScanner
+        }
     }
 
 
@@ -118,14 +108,17 @@ class BLE(private var context: Context) {
      *
      * @return An Array of Bluetooth devices found
      ***/
+
+    private var scanCallback: ScanCallback? = null
+    private var leScanCallBack: BluetoothAdapter.LeScanCallback? = null
+
     @OptIn(ExperimentalCoroutinesApi::class)
     @RequiresPermission(permission.BLUETOOTH_ADMIN)
     fun scan(
         filters: List<ScanFilter>? = null,
         settings: ScanSettings? = null,
         duration: Long = DEFAULT_TIMEOUT
-    ) = callbackFlow<BLEDevice> {
-
+    ) = callbackFlow<BluetoothDevice> {
 
         // Validates the duration
         if (duration <= 0)
@@ -136,56 +129,81 @@ class BLE(private var context: Context) {
 
         log("Starting scan...")
 
-        val scanCallbackInstance = object : ScanCallback() {
+        scanCallback =
+            @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+            object : ScanCallback() {
 
-            override fun onScanResult(callbackType: Int, result: ScanResult?) {
-                super.onScanResult(callbackType, result)
-                // Gets the device from the result
-                result?.device?.let { device ->
-                    log("Scan result! ${device.name} (${device.address}) ${result.rssi}dBm")
-                    offer(BLEDevice(result))
+                override fun onScanResult(callbackType: Int, result: ScanResult?) {
+                    super.onScanResult(callbackType, result)
+                    // Gets the device from the result
+                    result?.device?.let { device ->
+                        log("Scan result! ${device.name} (${device.address}) ${result.rssi}dBm")
+                        offer(result.device)
+                    }
                 }
+
+                override fun onScanFailed(errorCode: Int) {
+                    super.onScanFailed(errorCode)
+                    log("Scan failed! $errorCode")
+                    // Calls the error callback
+                    close(ScanFailureException(errorCode))
+                }
+
             }
 
-            override fun onScanFailed(errorCode: Int) {
-                super.onScanFailed(errorCode)
-                log("Scan failed! $errorCode")
-                // Calls the error callback
-                close(ScanFailureException(errorCode))
-            }
-
-        }
+        //under 21
+        leScanCallBack =
+            BluetoothAdapter.LeScanCallback { device, rssi, scanRecord -> device?.let { offer(it) } }
 
         // Starts the scan
         isScanRunning = true
 
-        scanner?.startScan(filters, settings ?: defaultScanSettings, scanCallbackInstance)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            val defaultScanSettings by lazy {
+
+                val builder =
+                    ScanSettings.Builder()
+                        .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+                    builder.setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
+                        //.setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
+                        .setNumOfMatches(ScanSettings.MATCH_NUM_ONE_ADVERTISEMENT)
+
+                builder.build()
+            }
+            scanner?.startScan(filters, settings ?: defaultScanSettings, scanCallback)
+        } else {
+            adapter?.startLeScan(leScanCallBack)
+        }
 
         // Automatically stops the scan if a duration is specified
         if (duration > 0) {
             log("Scan timeout reached!")
-
             // Waits for the specified timeout
             delay(duration)
-
             close()
         } else {
             log("Skipped timeout definition on scan!")
         }
-        awaitClose { stopScan(scanCallbackInstance) }
+        awaitClose { stopScan() }
     }
 
 
     /***
      * Stops the scan started by [scan]
      ***/
-    fun stopScan(scanCallbackInstance: ScanCallback) {
+    fun stopScan() {
         log("Stopping scan...")
 
         if (!isScanRunning) return
 
         isScanRunning = false
-        scanner?.stopScan(scanCallbackInstance)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP)
+            scanCallback?.let { scanner?.stopScan(it) }
+        else
+            leScanCallBack?.let { adapter?.stopLeScan(it) }
+
     }
 
     // region Utility methods
@@ -220,13 +238,5 @@ class BLE(private var context: Context) {
         }
     }
 
-    /***
-     * Establishes a connection with the specified bluetooth device
-     *
-     * @param device The device to be connected with
-     *
-     * @return A nullable [BluetoothConnection], null when not successful
-     ***/
-    suspend fun connect(device: BLEDevice): BluetoothConnection? = connect(device.device)
 
 }

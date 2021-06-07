@@ -10,6 +10,7 @@ import com.ble.typealiases.Callback
 import com.ble.typealiases.EmptyCallback
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import java.nio.charset.Charset
@@ -64,21 +65,7 @@ class BluetoothConnection(private val device: BluetoothDevice) {
     private fun log(message: String) {
         if (this.verbose) Log.d("BluetoothConnection", message)
     }
-
-    private fun detectCharacteristic(gatt: BluetoothGatt) {
-
-        for (gattService in gatt.services) {
-            log(gattService.characteristics.size.toString())
-            log(gattService.characteristics.last().uuid.toString())
-            gatt.setCharacteristicNotification(gattService.characteristics.last(),true)
-            readCharacteristic =
-                gattService.getCharacteristic(gattService.uuid)
-            writeCharacteristic =
-                gattService.getCharacteristic(gattService.uuid)
-        }
-
-    }
-
+val notificationData= MutableStateFlow<String?>(null)
     private fun setupGattCallback(): BluetoothGattCallback {
         return object : BluetoothGattCallback() {
 
@@ -114,7 +101,7 @@ class BluetoothConnection(private val device: BluetoothDevice) {
 
             override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
                 super.onServicesDiscovered(gatt, status)
-                detectCharacteristic(gatt!!)
+                // detectCharacteristic(gatt!!)
                 GlobalScope.launch {
                     if (status == BluetoothGatt.GATT_SUCCESS) {
                         connectionCallback?.invoke(true)
@@ -127,6 +114,15 @@ class BluetoothConnection(private val device: BluetoothDevice) {
                         connectionCallback?.invoke(false)
                     }
                 }
+            }
+
+            override fun onCharacteristicChanged(
+                gatt: BluetoothGatt?,
+                characteristic: BluetoothGattCharacteristic?
+            ) {
+                super.onCharacteristicChanged(gatt, characteristic)
+                Log.e(TAG, characteristic.descriptors., )
+//notificationData.value=characteristic.
             }
 
             override fun onReadRemoteRssi(gatt: BluetoothGatt?, rssi: Int, status: Int) {
@@ -222,27 +218,41 @@ class BluetoothConnection(private val device: BluetoothDevice) {
     fun write(characteristic: String, message: String, charset: Charset = Charsets.UTF_8): Boolean =
         this.write(characteristic, message.toByteArray(charset))
 
+    fun readByNotification(uuid: String) {
+        genericAttributeProfile?.let { gatt ->
+            val characteristic = getCharacteristic(gatt, uuid)
+            characteristic ?: return
+
+            gatt.setCharacteristicNotification(characteristic, true)
+
+            val desc: BluetoothGattDescriptor = characteristic.getDescriptor(characteristic.uuid)
+            desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+            gatt.writeDescriptor(desc)
+        }
+
+    }
 
     /***
      * Performs a read operation on a specific characteristic
      *
      * @see [read] For a variant that returns a [String] value
      *
-     * @param characteristic The uuid of the target characteristic
+     * @param uuid The uuid of the target characteristic
      *
      * @return A nullable [ByteArray], null when failed to read
      ***/
-    fun read(characteristic: String): ByteArray? {
+    fun read(uuid: String): ByteArray? {
         this.beginOperation()
 
         // Null safe let of the generic attribute profile
         genericAttributeProfile?.let { gatt ->
             // Searches for the characteristic
-            val c = getCharacteristic(gatt, characteristic)
-            if (c != null) {
+            val characteristic = getCharacteristic(gatt, uuid)
+
+            if (characteristic != null) {
                 // Tries to read its value, if successful return it
-                if (gatt.readCharacteristic(c)) {
-                    return c.value.also {
+                if (gatt.readCharacteristic(characteristic)) {
+                    return characteristic.value.also {
                         this.finishOperation()
                     }
                 } else {
@@ -287,12 +297,12 @@ class BluetoothConnection(private val device: BluetoothDevice) {
      *
      * @see [read] For a variant that returns a [ByteArray] value
      *
-     * @param characteristic The uuid of the target characteristic
+     * @param uuid The uuid of the target characteristic
      *
      * @return A nullable [String], null when failed to read
      ***/
-    fun read(characteristic: String, charset: Charset = Charsets.UTF_8): String? =
-        this.read(characteristic)?.let { String(it, charset) }
+    fun read(uuid: String, charset: Charset = Charsets.UTF_8): String? =
+        this.read(uuid)?.let { String(it, charset) }
 
     // region Workaround for lollipop
     private fun isLollipop() =
