@@ -97,7 +97,7 @@ class BLE(private var context: Context) {
      *
      * If only one device is required consider using [scanFor]
      *
-     * @see scan For a variation using callbacks
+     * @see underLScan For a variation using callbacks
      *
      * @param filters Used to specify attributes of the devices on the scan
      * @param settings Native object to specify the scan settings (The default setting is only recommended for really fast scans)
@@ -112,6 +112,7 @@ class BLE(private var context: Context) {
     private var scanCallback: ScanCallback? = null
     private var leScanCallBack: BluetoothAdapter.LeScanCallback? = null
 
+    @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
     @OptIn(ExperimentalCoroutinesApi::class)
     @RequiresPermission(permission.BLUETOOTH_ADMIN)
     fun scan(
@@ -138,7 +139,8 @@ class BLE(private var context: Context) {
                     // Gets the device from the result
                     result?.device?.let { device ->
                         log("Scan result! ${device.name} (${device.address}) ${result.rssi}dBm")
-                        offer(result.device)
+                        if (trySend(result.device).isFailure)
+                            log("callback flow can't send data")
                     }
                 }
 
@@ -151,31 +153,71 @@ class BLE(private var context: Context) {
 
             }
 
-        //under 21
-        leScanCallBack =
-            BluetoothAdapter.LeScanCallback { device, rssi, scanRecord -> device?.let { offer(it) } }
+        val defaultScanSettings by lazy {
+            val builder =
+                ScanSettings.Builder()
+                    .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+                builder.setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
+                    .setNumOfMatches(ScanSettings.MATCH_NUM_ONE_ADVERTISEMENT)
+
+            builder.build()
+        }
 
         // Starts the scan
         isScanRunning = true
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            val defaultScanSettings by lazy {
+        scanner?.startScan(filters, settings ?: defaultScanSettings, scanCallback)
 
-                val builder =
-                    ScanSettings.Builder()
-                        .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
 
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
-                    builder.setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
-                        //.setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
-                        .setNumOfMatches(ScanSettings.MATCH_NUM_ONE_ADVERTISEMENT)
-
-                builder.build()
-            }
-            scanner?.startScan(filters, settings ?: defaultScanSettings, scanCallback)
+        // Automatically stops the scan if a duration is specified
+        if (duration > 0) {
+            log("Scan timeout reached!")
+            // Waits for the specified timeout
+            delay(duration)
+            close()
         } else {
-            adapter?.startLeScan(leScanCallBack)
+            log("Skipped timeout definition on scan!")
         }
+        awaitClose { stopScan() }
+    }
+
+    /**
+     * just use in under LOLLIPOP
+     * */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @RequiresPermission(permission.BLUETOOTH_ADMIN)
+    fun underLScan(
+        uuids: Array<UUID>? = null,
+        duration: Long = DEFAULT_TIMEOUT
+    ) = callbackFlow {
+
+        // Validates the duration
+        if (duration <= 0)
+            close(IllegalArgumentException("In order to run a synchronous scan you'll need to specify a duration greater than 0ms!"))
+
+        if (scanner == null)
+            close(Exception("should call setup() first!"))
+
+        log("Starting scan...")
+
+        //under 21
+        leScanCallBack =
+            BluetoothAdapter.LeScanCallback { device, rssi, scanRecord ->
+                log("Scan result! ${device.name} (${device.address}) ${rssi}dBm")
+                device?.let {
+                    if (trySend(it).isFailure)
+                        log("callback flow can't send data")
+                }
+            }
+
+        // Starts the scan
+        isScanRunning = true
+
+        @Suppress("DEPRECATION")
+        adapter?.startLeScan(uuids, leScanCallBack)
+
 
         // Automatically stops the scan if a duration is specified
         if (duration > 0) {
@@ -191,7 +233,7 @@ class BLE(private var context: Context) {
 
 
     /***
-     * Stops the scan started by [scan]
+     * Stops the scan started by [underLScan]
      ***/
     fun stopScan() {
         log("Stopping scan...")
@@ -199,10 +241,14 @@ class BLE(private var context: Context) {
         if (!isScanRunning) return
 
         isScanRunning = false
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP)
             scanCallback?.let { scanner?.stopScan(it) }
         else
-            leScanCallBack?.let { adapter?.stopLeScan(it) }
+            leScanCallBack?.let {
+                @Suppress("DEPRECATION")
+                adapter?.stopLeScan(it)
+            }
 
     }
 

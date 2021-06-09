@@ -13,9 +13,9 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.onCompletion
 
 
+const val SPIROMETER_CHARACTERISTIC = "0000FFE1-0000-1000-8000-00805F9B34FB"
+const val TAG = "MyTag"
 
-const val SPIROMETER_CHARACTERISTIC="0000FFE1-0000-1000-8000-00805F9B34FB"
-const val TAG="MyTag"
 class MainActivity : AppCompatActivity() {
     @SuppressLint("MissingPermission")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -30,22 +30,26 @@ class MainActivity : AppCompatActivity() {
         }
 
         ble.verbose = true
-        lifecycle.coroutineScope.launchWhenCreated {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-
-
-            }
-        }
 
         val devList = ArrayList<BluetoothDevice>()
+
         lifecycle.coroutineScope.launchWhenStarted {
+            val scanFlow = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP)
+                ble.scan(duration = 5000)
+            else
+                ble.underLScan(duration = 5000)
 
-            ble.scan(duration = 5000).catch { e ->
+            scanFlow.catch { e ->
 
-            }.onCompletion { e ->
-                devList.find { it.address.contains("D0:B5:C2:AF") }?.let {
-                    ble.connect(it)?.startReadings(SPIROMETER_CHARACTERISTIC)?.collect {
-                        Log.e(TAG, it)
+            }.onCompletion {
+                devList.find { it.address.contains("D0:B5:C2:AF") }?.let { btDevice ->
+                    /*  ble.connect(btDevice)?.startReadings(SPIROMETER_CHARACTERISTIC)?.collect {
+                          Log.e(TAG, it)
+                      }*/
+                    val connection = ble.connect(btDevice)
+                    connection?.readByNotification(SPIROMETER_CHARACTERISTIC)
+                    connection?.notificationData?.collect {
+                        Log.e(TAG, it?.decodeToString().toString())
                     }
                 }
             }.collect {
