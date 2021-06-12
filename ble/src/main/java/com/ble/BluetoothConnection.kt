@@ -7,7 +7,7 @@ import android.os.Build.VERSION_CODES
 import android.util.Log
 import com.ble.typealiases.Callback
 import com.ble.typealiases.EmptyCallback
-import com.ble.utils.isNOTIFY
+import com.ble.utils.isNotify
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
@@ -114,7 +114,7 @@ class BluetoothConnection(private val device: BluetoothDevice) {
                 characteristic: BluetoothGattCharacteristic?
             ) {
                 super.onCharacteristicChanged(gatt, characteristic)
-                if (characteristic?.isNOTIFY() == true) {
+                if (characteristic?.isNotify() == true) {
                     val data = characteristic.value
                     notificationData.value = data
                 }
@@ -194,12 +194,15 @@ class BluetoothConnection(private val device: BluetoothDevice) {
     fun write(characteristic: String, message: String, charset: Charset = Charsets.UTF_8): Boolean =
         this.write(characteristic, message.toByteArray(charset))
 
-    fun readByNotification(uuid: String) {
+    fun setNotification(uuid: String) {
         bluetoothGatt?.let { gatt ->
             val characteristic = getCharacteristic(gatt, uuid)
-            log("characteristic is null!")
+            log("can not get characteristic")
             characteristic ?: return
-
+            if (!characteristic.isNotify()) {
+                log("characteristic is not notifiable!")
+                return
+            }
             gatt.setCharacteristicNotification(characteristic, true)
 
             characteristic.descriptors.forEach { desc ->
@@ -306,7 +309,7 @@ class BluetoothConnection(private val device: BluetoothDevice) {
         }
     }
 
-     fun establish(context: Context, callback: Callback<Boolean>) {
+    fun establish(context: Context, callback: Callback<Boolean>) {
         connectionCallback = callback
 
         bluetoothGatt = if (VERSION.SDK_INT < VERSION_CODES.M)

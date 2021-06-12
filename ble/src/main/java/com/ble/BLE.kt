@@ -1,20 +1,34 @@
 package com.ble
 
+import android.Manifest
 import android.Manifest.permission
+import android.app.Activity
+import android.app.Application
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.*
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager.PERMISSION_GRANTED
+import android.location.LocationManager
 import android.os.Build
+import android.os.Bundle
+import android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS
 import android.util.Log
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.annotation.RequiresPermission
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.ble.exceptions.*
 import com.ble.utils.PermissionUtils
+import com.ble.utils.doubleButtonAlertDialog
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.callbackFlow
+import java.security.Provider
 import java.util.*
 import kotlin.coroutines.resume
 
@@ -285,4 +299,52 @@ class BLE(private var context: Context) {
     }
 
 
+    suspend fun checkPermissions(activityCompat: AppCompatActivity ): Boolean {
+        return suspendCancellableCoroutine { continuation ->
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M)
+                continuation.resume(true)
+
+            if (ContextCompat.checkSelfPermission(context, permission.ACCESS_FINE_LOCATION) != PERMISSION_GRANTED)
+                activityCompat.registerForActivityResult(
+                    ActivityResultContracts.RequestPermission()
+                ) { isGranted: Boolean ->
+                    if (isGranted)
+                        continuation.resume(true)
+                    else
+                        continuation.resume(false)
+
+                }.launch(permission.ACCESS_FINE_LOCATION)
+        }
+    }
+
+    suspend fun checkLocationService(appCompatActivity: AppCompatActivity): Boolean {
+        return suspendCancellableCoroutine { continuation ->
+
+            val locationManager =
+                context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER))
+                continuation.resume(true)
+            else {
+                val activityResultLauncher =
+                    appCompatActivity.registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+                        if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER))
+                            continuation.resume(true)
+                        else
+                            continuation.resume(false)
+                    }
+                context.doubleButtonAlertDialog(
+                    "Enable location",
+                    "Please enable location service to find device",
+                    "OK",
+                    "Cancel",
+                    {
+                        activityResultLauncher.launch(Intent(ACTION_LOCATION_SOURCE_SETTINGS))
+                    },
+                    {
+                        continuation.resume(false)
+                    })
+
+            }
+        }
+    }
 }
